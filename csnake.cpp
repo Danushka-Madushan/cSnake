@@ -9,6 +9,7 @@
 #include <chrono>
 #include <map>
 #include <vector>
+#include <algorithm> /* BUG FIX: Added <algorithm> to use std::remove_if for safe deletion */
 
 enum Directions
 {
@@ -32,13 +33,26 @@ static const bool use_two_jumps_for_x_axis = true;
 int tailLength = 3;
 std::vector<std::map<Keys, int>> tailMap;
 std::vector<Directions> tailDirections;
-std::vector<std::pair<std::map<Keys, int>, Directions>> turningPoints;
+
+/* BUG FIX: Replaced complex nested maps with a clear Struct.
+   The 'remainingPasses' counter tracks how many tail segments still need to use this turn.
+   This prevents the turn from vanishing if the snake grows before the last piece reaches it. */
+struct TurningPoint
+{
+  int x;
+  int y;
+  Directions direction;
+  int remainingPasses;
+};
+std::vector<TurningPoint> turningPoints;
+
 int snake_head_grid_location_x = ((width - 2) / 2) + 1;
 int snake_head_grid_location_y = tailLength + 2;
 Directions current_direction = Down;
 std::pair<int, int> appleLocation;
-std::pair<int, int> endOfTailLocation;
-Directions endOfTailDirection;
+
+/* BUG FIX: Removed endOfTailLocation and endOfTailDirection entirely.
+   Calculating global "last state" variables at the wrong time in the loop caused the timing mismatch. */
 
 std::string padWithZeros(int value, unsigned int width)
 {
@@ -140,10 +154,48 @@ std::map<Keys, int> moveToDirection(int x, int y, Directions direction)
 
   if (directionMap[Keys::XAxis] == appleLocation.first && directionMap[Keys::YAxis] == appleLocation.second)
   {
-    /* append new tail */
-    tailMap.push_back({{Keys::XAxis, endOfTailLocation.first}, {Keys::YAxis, endOfTailLocation.second}});
-    tailDirections.push_back(endOfTailDirection);
+    /* BUG FIX: "Inherit from Parent" logic.
+       Instead of relying on out-of-sync global variables, we look at the CURRENT last piece
+       and mathematically spawn the new piece exactly one block directly behind it. */
+    int new_tail_x = tailMap.back().at(Keys::XAxis);
+    int new_tail_y = tailMap.back().at(Keys::YAxis);
+    Directions new_tail_dir = tailDirections.back();
+
+    switch (new_tail_dir)
+    {
+      case Directions::Up:
+      {
+        new_tail_y++;
+        break;
+      }
+      case Directions::Down:
+      {
+        new_tail_y--;
+        break;
+      }
+      case Directions::Left:
+      {
+        new_tail_x += (use_two_jumps_for_x_axis ? 2 : 1);
+        break;
+      }
+      case Directions::Right:
+      {
+        new_tail_x -= (use_two_jumps_for_x_axis ? 2 : 1);
+        break;
+      }
+    }
+
+    tailMap.push_back({{Keys::XAxis, new_tail_x}, {Keys::YAxis, new_tail_y}});
+    tailDirections.push_back(new_tail_dir);
     tailLength++;
+
+    /* BUG FIX: Because the snake grew, every active turning point on the map
+       needs to stay open for 1 extra pass so the new piece doesn't miss it. */
+    for (int i = 0; i < turningPoints.size(); i++)
+    {
+      turningPoints[i].remainingPasses++;
+    }
+
     generateAppleLocation();
   }
 
@@ -152,30 +204,40 @@ std::map<Keys, int> moveToDirection(int x, int y, Directions direction)
 
 void calculateTailMovingDirection()
 {
-  endOfTailLocation = {tailMap[tailLength - 1].at(Keys::XAxis), tailMap[tailLength - 1].at(Keys::YAxis)};
-  endOfTailDirection = tailDirections[tailLength - 1];
+  /* BUG FIX: Removed endOfTailLocation calculations.
+     We now loop through segments and let them "consume" the turning points. */
   for (int i = 0; i < tailLength; i++)
   {
     auto tailPart = tailMap[i];
     for (int j = 0; j < turningPoints.size(); j++)
     {
-      auto turningPoint = turningPoints[j];
-      if (tailPart.at(Keys::XAxis) == turningPoint.first.at(Keys::XAxis) && tailPart.at(Keys::YAxis) == turningPoint.first.at(Keys::YAxis))
+      if (tailPart.at(Keys::XAxis) == turningPoints[j].x && tailPart.at(Keys::YAxis) == turningPoints[j].y)
       {
-        tailDirections[i] = turningPoint.second;
-        if (i == tailLength - 1)
-        {
-          turningPoints.erase(turningPoints.begin() + j);
-        }
+        tailDirections[i] = turningPoints[j].direction;
+
+        /* BUG FIX: Decrease the turn's lifespan when ANY segment passes it.
+           We no longer rely on if (i == tailLength - 1) which was breaking upon growth. */
+        turningPoints[j].remainingPasses--;
         break;
       }
     }
   }
+
+  /** 
+   * BUG FIX: Safely erase turning points ONLY when their counter hits 0.
+   * This guarantees every tail piece has successfully made the turn before it gets deleted.
+  */
+  turningPoints.erase(
+    std::remove_if(turningPoints.begin(), turningPoints.end(),
+    [](const TurningPoint &tp){ return tp.remainingPasses <= 0; }),
+    turningPoints.end()
+  );
 }
 
 void addTurningPoint()
 {
-  turningPoints.push_back({{{Keys::XAxis, snake_head_grid_location_x}, {Keys::YAxis, snake_head_grid_location_y}}, current_direction});
+  /* BUG FIX: Initialize the new turning point with a counter equal to the current tailLength. */
+  turningPoints.push_back({snake_head_grid_location_x, snake_head_grid_location_y, current_direction, tailLength});
 }
 
 void moveTail()
@@ -258,7 +320,8 @@ std::string drawGrid(int snake_head_x, int snake_head_y, int tail_length)
           {
             /* draw apple */
             grid += (char)237;
-          } else 
+          }
+          else
           {
             /* draw empty space */
             grid += " ";
@@ -372,25 +435,24 @@ int main()
       }
     }
 
+    /* refresh rate & game speed */
+    Sleep(100);
+    std::cout << " * Location : "
+              << "[X=" << padWithZeros(snake_head_grid_location_x, 2)
+              << ", Y=" << padWithZeros(snake_head_grid_location_y, 2) << "]";
+    std::cout << " | Apple : "
+              << "[X=" << padWithZeros(appleLocation.first, 2)
+              << ", Y=" << padWithZeros(appleLocation.second, 2) << "]\n";
+    std::cout << " * Score    : " << tailLength - 3 << std::endl;
+    std::map<Keys, int> directionMap = moveToDirection(snake_head_grid_location_x, snake_head_grid_location_y, current_direction);
+    snake_head_grid_location_x = directionMap.at(Keys::XAxis);
+    snake_head_grid_location_y = directionMap.at(Keys::YAxis);
+    calculateTailMovingDirection();
+    moveTail();
+    std::cout << drawGrid(snake_head_grid_location_x, snake_head_grid_location_y, tailLength) << std::flush;
+    for (int i = 0; i < (height + 5); i++)
     {
-      /* refresh rate & game speed */
-      Sleep(100);
-      std::cout << " * Location : "
-                << "[X=" << padWithZeros(snake_head_grid_location_x, 2)
-                << ", Y=" << padWithZeros(snake_head_grid_location_y, 2) << "]"  << std::endl;
-      std::cout << " * Apple    : "
-                << "[X=" << padWithZeros(appleLocation.first, 2)
-                << ", Y=" << padWithZeros(appleLocation.second, 2) << "]\n"  << std::endl;
-      std::map<Keys, int> directionMap = moveToDirection(snake_head_grid_location_x, snake_head_grid_location_y, current_direction);
-      snake_head_grid_location_x = directionMap.at(Keys::XAxis);
-      snake_head_grid_location_y = directionMap.at(Keys::YAxis);
-      calculateTailMovingDirection();
-      moveTail();
-      std::cout << drawGrid(snake_head_grid_location_x, snake_head_grid_location_y, tailLength) << std::flush;
-      for (int i = 0; i < (height + 5); i++)
-      {
-        std::cout << "\033[A";
-      }
+      std::cout << "\033[A";
     }
   }
 
