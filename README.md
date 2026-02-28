@@ -7,7 +7,6 @@
   ![Platform](https://img.shields.io/badge/platform-Windows-blue)
   ![Language](https://img.shields.io/badge/language-C%2B%2B-orange)
   ![Build](https://img.shields.io/badge/build-CMake-lightgrey)
-  ![License](https://img.shields.io/badge/license-MIT-green)
 </div>
 
 ---
