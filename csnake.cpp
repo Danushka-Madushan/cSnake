@@ -520,6 +520,17 @@ void drawGameOver(int score, const std::string &reason)
 
 int main()
 {
+  /* Enable ANSI/VT100 escape code processing for CMD compatibility */
+  HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (hOut != INVALID_HANDLE_VALUE)
+  {
+    DWORD dwMode = 0;
+    if (GetConsoleMode(hOut, &dwMode))
+    {
+      SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+  }
+
   /* register signal handler for SIGINT (ctrl+c) */
   signal(SIGINT, signalHandler);
 
