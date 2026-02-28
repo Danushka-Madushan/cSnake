@@ -69,7 +69,7 @@ std::string padWithZeros(int value, unsigned int fieldWidth)
 int getRandomPoint(int from, int to, bool isEven = false)
 {
   /* Static ensures the engine is seeded only once for the lifetime of the program */
-  static std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
+  static std::mt19937 gen(static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count()));
 
   if (isEven)
   {
