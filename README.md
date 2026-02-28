@@ -1,0 +1,296 @@
+<div align="center">
+  <img src="https://cdn-icons-png.flaticon.com/512/3599/3599853.png" width="100" alt="cSnake Logo"/>
+  <h1>cSnake</h1>
+  <p><strong>A terminal-based Snake game written in C++ — fast, minimal, and dependency-free.</strong></p>
+
+  ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
+  ![Platform](https://img.shields.io/badge/platform-Windows-blue)
+  ![Language](https://img.shields.io/badge/language-C%2B%2B-orange)
+  ![Build](https://img.shields.io/badge/build-CMake-lightgrey)
+  ![License](https://img.shields.io/badge/license-MIT-green)
+</div>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Demo](#demo)
+- [Download](#download)
+- [Controls](#controls)
+- [How It Works](#how-it-works)
+  - [Grid & Coordinate System](#grid--coordinate-system)
+  - [Turning Point Mechanism](#turning-point-mechanism)
+  - [Apple Spawning](#apple-spawning)
+  - [Tail Growth](#tail-growth)
+  - [Collision Detection](#collision-detection)
+  - [Rendering Pipeline](#rendering-pipeline)
+- [Building from Source](#building-from-source)
+- [Configuration](#configuration)
+- [AI-Assisted Refactoring](#ai-assisted-refactoring)
+- [Known Limitations](#known-limitations)
+- [Contributing](#contributing)
+
+---
+
+## Overview
+
+cSnake is a classic Snake game that runs entirely in the Windows terminal. No external libraries, no game engine — just raw C++ and standard ANSI escape codes driving a tight game loop at 10 ticks per second.
+
+The game features:
+
+- Smooth snake movement across a bordered grid
+- A persistent turning point system that keeps the entire tail geometrically correct through every direction change
+- Instant wall and self-collision detection
+- Score tracking with game over screen
+- Restart without relaunching the executable
+
+---
+
+## Demo
+
+![Demo](https://r2.zenthos.dev/demo.gif)
+
+---
+
+## Download
+
+Pre-compiled Windows binaries are available on the [**Releases page**](../../releases/latest). Download the latest `.exe`, run it directly in any terminal — no installation required.
+
+---
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| `W` | Move Up |
+| `A` | Move Left |
+| `S` | Move Down |
+| `D` | Move Right |
+| `R` | Restart *(on Game Over screen)* |
+| `Q` | Quit at any time |
+| `Ctrl+C` | Force quit & clear terminal |
+
+---
+
+## How It Works
+
+### Grid & Coordinate System
+
+The play area is a fixed `61 × 20` grid enclosed by box-drawing characters (`╔ ╗ ╚ ╝ ═ ║`). Width must always be an **odd number** due to the X-axis double-step mechanic.
+
+When `use_two_jumps_for_x_axis = true` (the default), the snake moves **2 columns per tick** on the X axis and **1 row per tick** on the Y axis. This compensates for the rectangular shape of terminal character cells — characters are taller than they are wide, so without the double step the snake would feel sluggish and stretched horizontally. The result is visually square movement in the terminal.
+
+The coordinate origin `(1, 0)` is the top-left interior cell. The snake head and all tail segments store absolute grid coordinates as `Point { int x, int y }` structs backed by a contiguous `std::vector`, which keeps all position data cache-friendly.
+
+---
+
+### Turning Point Mechanism
+
+This is the most technically interesting part of the game.
+
+In a naive snake implementation, every tail segment tracks the head's full position history and replays it with a delay. cSnake uses a lighter mechanism: **turning points**.
+
+When the player changes direction, a `TurningPoint` is stamped at the head's current grid cell:
+
+```cpp
+struct TurningPoint {
+  int x;
+  int y;
+  Directions direction;
+  int remainingPasses; // countdown: how many segments still need to pass through
+};
+```
+
+Each tail segment travels in its own `Directions` value stored in a parallel `tailDirections` vector. Every tick, `calculateTailMovingDirection()` scans all segments against all active turning points. When a segment's position matches a turning point's `(x, y)`, that segment adopts the new direction and the turning point's `remainingPasses` counter decrements by one.
+
+When `remainingPasses` reaches zero — meaning every segment has passed through — the turning point is erased using the erase-remove idiom:
+
+```cpp
+turningPoints.erase(
+  std::remove_if(turningPoints.begin(), turningPoints.end(),
+  [](const TurningPoint &tp){ return tp.remainingPasses <= 0; }),
+  turningPoints.end()
+);
+```
+
+**Growth safety:** When the snake eats an apple and a new segment is appended, every active turning point has its `remainingPasses` incremented by one. This guarantees the new tail piece won't miss a turn that was already in progress before it was born.
+
+**Rapid input safety:** If two direction keys are pressed within the same frame before the head has moved, `addTurningPoint()` detects an existing turning point at the same cell and overwrites it with the latest direction rather than stacking a duplicate.
+
+---
+
+### Apple Spawning
+
+Apple positions are generated by `generateAppleLocation()` using a seeded Mersenne Twister (`std::mt19937`) initialized once at program start via the system clock:
+
+```cpp
+static std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
+```
+
+For X-axis positions, the generator works directly in the valid even-number range to guarantee a legal grid column in a single draw — no retry loop needed:
+
+```cpp
+int evenFrom = (from % 2 == 0) ? from : from + 1;
+int evenTo   = (to   % 2 == 0) ? to   : to - 1;
+std::uniform_int_distribution<> distrib(0, (evenTo - evenFrom) / 2);
+return evenFrom + distrib(gen) * 2;
+```
+
+The generated position is rejected and redrawn if it lands on the snake's head or any tail segment, ensuring the apple always spawns on a free cell.
+
+---
+
+### Tail Growth
+
+When the head moves onto the apple's cell, a new segment is spawned directly behind the current last tail piece using the **"inherit from parent"** strategy:
+
+1. Read the last tail segment's current position and direction.
+2. Calculate one step *opposite* to that direction — this is exactly where the new piece should visually appear.
+3. Clamp to grid bounds in case the last segment is against a wall.
+4. Push the new `Point` and its `Directions` entry to the back of both vectors.
+5. Increment `remainingPasses` on all active turning points.
+
+This approach is entirely self-contained inside `moveToDirection()` and requires no global timing state.
+
+---
+
+### Collision Detection
+
+**Wall collision — O(1):**
+
+`moveToDirection()` clamps movement at boundaries rather than wrapping. After calling it, the main loop compares the returned position to the input position. If they are identical, the head did not move — it hit a wall:
+
+```cpp
+Point newPos = moveToDirection(snake_head_grid_location_x, snake_head_grid_location_y, current_direction);
+if (newPos.x == snake_head_grid_location_x && newPos.y == snake_head_grid_location_y)
+{
+  gameOver = true;
+  gameOverReason = "Wall";
+}
+```
+
+**Self-collision — O(N):**
+
+After all segments have moved via `moveTail()`, `checkSelfCollision()` linearly scans the tail vector starting at index `1` (index `0` physically trails the head and cannot overlap it under normal movement guards):
+
+```cpp
+for (int i = 1; i < tailLength; i++)
+{
+  if (tailMap[i].x == snake_head_grid_location_x &&
+      tailMap[i].y == snake_head_grid_location_y)
+    return true;
+}
+```
+
+The scan is deliberately performed *after* `moveTail()` so all segments are at their final positions for that frame before the check runs.
+
+---
+
+### Rendering Pipeline
+
+Each frame produces a single large `std::string` built entirely in memory before any I/O occurs, keeping terminal writes to one syscall per frame.
+
+**Tail lookup optimization:**
+
+Rather than scanning all tail segments for every cell in the grid (`O(width × height × tailLength)`), `drawGrid()` first builds a flat `bool occupied[height][width]` array on the stack in one O(N) pass over the tail vector. Each cell then does an O(1) array lookup:
+
+```cpp
+bool occupied[height][width] = {};
+for (int i = 0; i < tail_length; i++)
+  occupied[tailMap[i].y][tailMap[i].x - 1] = true;
+```
+
+**String pre-allocation:**
+
+The grid string is pre-allocated to its exact upper-bound size before any characters are appended, avoiding any reallocation mid-build:
+
+```cpp
+grid.reserve((width + 1) * (height + 2) + 32);
+```
+
+**Cursor repositioning:**
+
+Instead of clearing the terminal each frame (which causes flicker), the cursor is moved back up using a single ANSI escape sequence computed once at startup:
+
+```cpp
+static const std::string CURSOR_UP = "\033[" + std::to_string(height + 5) + "A";
+```
+
+This produces a flicker-free animation at the full 10 FPS tick rate.
+
+---
+
+## Building from Source
+
+**Requirements:**
+- Windows 10 or later
+- CMake 3.15+
+- MSVC or MinGW-w64
+
+```bash
+git clone https://github.com/yourusername/csnake.git
+cd csnake
+cmake -B build -S .
+cmake --build build --config Release
+./build/Release/csnake.exe
+```
+
+> Cross-platform support (Linux / macOS) is planned for a future release. The current implementation uses `<conio.h>` and `<windows.h>` which are Windows-only.
+
+---
+
+## Configuration
+
+All tunable constants are defined at the top of `csnake.cpp`:
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `width` | `61` | Grid width in columns. **Must be an odd number.** |
+| `height` | `20` | Grid height in rows |
+| `use_two_jumps_for_x_axis` | `true` | Move 2 columns per tick on X to correct for character aspect ratio |
+| `initialTailLength` | `3` | Starting tail length |
+| `refresh_rate` | `100` | Tick duration in milliseconds (lower = faster) |
+
+---
+
+## AI-Assisted Refactoring
+
+Approximately **13% of the codebase** was refactored with the assistance of **Claude AI** (Anthropic). The AI was used as a code reviewer and refactoring partner across several passes, identifying and resolving the following categories of issues:
+
+- **Data structure replacement** — `std::map<Keys, int>` for tail positions replaced with a plain `Point` struct, eliminating per-frame heap allocations from red-black tree nodes
+- **Turning point lifecycle bug** — the original `endOfTailLocation` global caused a timing mismatch that corrupted tail direction state upon snake growth; replaced with the `remainingPasses` counter system
+- **Apple spawn collision bug** — `continue` inside a nested `for` loop was not escaping the outer `while` loop, allowing the apple to spawn on top of the tail
+- **Rapid input duplicate turning points** — multiple key presses within one frame could stack multiple turning points at the same cell, causing direction corruption
+- **`drawGrid` O(N) optimization** — the per-cell full tail scan was replaced with a pre-built O(1) bool lookup array
+- **`getRandomPoint` even distribution** — eliminated the retry loop in favor of direct arithmetic in the valid even range
+- Various minor improvements: `std::endl` → `'\n'`, pre-allocated HUD string, single-string cursor repositioning, dead includes removed
+
+All logic, architecture, and design decisions are original. Claude was used strictly as a static analysis and refactoring tool.
+
+---
+
+## Known Limitations
+
+- **Windows only** — `<conio.h>` and `<windows.h>` are not available on other platforms. Cross-platform build is planned.
+- **Single key input per frame** — very fast key sequences within one 100ms tick may be partially dropped
+- **Terminal font dependent** — box-drawing characters and the apple glyph require a font with full CP437 support (Consolas, Lucida Console, or any Nerd Font work well)
+
+---
+
+## Contributing
+
+Found a bug or want to improve something? **Please open a Pull Request** — contributions are very welcome.
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b fix/your-bug-name`
+3. Commit your changes with a clear message
+4. Open a Pull Request describing what you changed and why
+
+Please keep PRs focused — one fix or feature per PR makes review much faster. For larger changes, consider opening an issue first to discuss the approach.
+
+---
+
+<div align="center">
+  <sub>cSnake v1.0.0 — Built with C++ & CMake — Windows</sub>
+</div>
