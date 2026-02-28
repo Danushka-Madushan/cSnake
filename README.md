@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://cdn-icons-png.flaticon.com/512/3599/3599853.png" width="100" alt="cSnake Logo"/>
   <h1>cSnake</h1>
-  <p><strong>A terminal-based Snake game written in C++ — fast, minimal, and dependency-free.</strong></p>
+  <p><strong>A fast, minimal, and dependency-free terminal-based Snake game written in C++</strong></p>
 
   ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
   ![Platform](https://img.shields.io/badge/platform-Windows-blue)
