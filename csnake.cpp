@@ -3,7 +3,6 @@
 #include <windows.h>
 #include <csignal>
 #include <string>
-#include <sstream>
 #include <iomanip>
 #include <random>
 #include <chrono>
