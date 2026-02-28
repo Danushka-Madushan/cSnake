@@ -3,7 +3,7 @@
   <h1>cSnake</h1>
   <p><strong>A fast, minimal, and dependency-free terminal-based Snake game written in C++</strong></p>
 
-  ![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
+  ![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
   ![Platform](https://img.shields.io/badge/platform-Windows-blue)
   ![Language](https://img.shields.io/badge/language-C%2B%2B-orange)
   ![Build](https://img.shields.io/badge/build-CMake-lightgrey)
